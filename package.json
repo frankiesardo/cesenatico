@@ -9,8 +9,10 @@
     "typecheck": "react-router typegen && tsc"
   },
   "dependencies": {
+    "@ai-sdk/openai": "^2.0.88",
     "@react-router/node": "7.10.1",
     "@react-router/serve": "7.10.1",
+    "ai": "^5.0.115",
     "isbot": "^5.1.31",
     "react": "^19.2.3",
     "react-dom": "^19.2.3",
