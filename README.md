@@ -14,6 +14,9 @@ npm install
 
 ```
 OPENAI_API_KEY=sk-your-api-key-here
+OPENAI_API_BASE=base-url
+STRAPI_URL=strapi-url
+STRAPI_TOKEN=read-token
 ```
 
 3. Run the development server:
