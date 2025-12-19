@@ -6,15 +6,111 @@ import { createOpenAICompatible } from '@ai-sdk/openai-compatible';
 
 export function meta({}: Route.MetaArgs) {
   return [
-    { title: "AI Chat" },
-    { name: "description", content: "Simple AI Chat" },
+    { title: "Visit Cesenatico - Assistente Turistico" },
+    { name: "description", content: "Scopri eventi, attrazioni e suggerimenti per la tua visita a Cesenatico" },
   ];
+}
+
+type StrapiEvent = {
+  id: number;
+  documentId: string;
+  titolo: string;
+  descrizione?: string;
+  dataInizio?: string;
+  dataFine?: string;
+  localita?: string;
+  gratuito?: boolean;
+  prezzo?: string | null;
+  linkUrl?: string;
+  [key: string]: unknown;
+};
+
+async function fetchTodayEvents(): Promise<StrapiEvent[]> {
+  const today = new Date().toISOString().split('T')[0];
+  // Filter: events where today falls between dataInizio and dataFine
+  const url = `${process.env.STRAPI_URL}/api/eventi?filters[dataInizio][$lte]=${today}&filters[dataFine][$gte]=${today}&pagination[limit]=50`;
+  
+  console.log("=== Strapi API Request ===");
+  console.log("URL:", url);
+  console.log("Date filter:", today);
+  
+  try {
+    const response = await fetch(url, {
+      headers: {
+        'Authorization': `Bearer ${process.env.STRAPI_TOKEN}`,
+        'Content-Type': 'application/json',
+      },
+    });
+
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`Strapi API error: ${response.status} - ${errorText}`);
+      return [];
+    }
+
+    const data = await response.json();
+    console.log("Events found:", data.data?.length || 0);
+    return data.data || [];
+  } catch (error) {
+    console.error("Failed to fetch events:", error);
+    return [];
+  }
+}
+
+function formatEventsForContext(events: StrapiEvent[]): string {
+  if (events.length === 0) {
+    return "Non ci sono eventi in programma per oggi.";
+  }
+
+  const today = new Date().toLocaleDateString('it-IT', { 
+    weekday: 'long', 
+    year: 'numeric', 
+    month: 'long', 
+    day: 'numeric' 
+  });
+
+  let context = `📅 Eventi di oggi (${today}) a Cesenatico:\n\n`;
+  
+  events.forEach((event, index) => {
+    context += `${index + 1}. **${event.titolo}**\n`;
+    if (event.descrizione) {
+      // Strip HTML tags and limit description
+      const plainDesc = event.descrizione.replace(/<[^>]*>/g, '').trim().substring(0, 200);
+      context += `   ${plainDesc}${plainDesc.length >= 200 ? '...' : ''}\n`;
+    }
+    if (event.localita) context += `   📍 Località: ${event.localita}\n`;
+    if (event.dataInizio && event.dataFine) {
+      context += `   📆 Dal ${event.dataInizio} al ${event.dataFine}\n`;
+    }
+    if (event.gratuito) context += `   🎟️ Gratuito\n`;
+    else if (event.prezzo) context += `   🎟️ Prezzo: ${event.prezzo}\n`;
+    if (event.linkUrl) context += `   🔗 ${event.linkUrl}\n`;
+    context += '\n';
+  });
+
+  return context;
 }
 
 export async function action({ request }: Route.ActionArgs) {
   const formData = await request.formData();
   const messagesJson = formData.get("messages") as string;
   const messages = JSON.parse(messagesJson);
+
+  // Fetch today's events from Strapi
+  const events = await fetchTodayEvents();
+  const eventsContext = formatEventsForContext(events);
+
+  const systemPrompt = `Sei un assistente turistico per Cesenatico, una bellissima località balneare sulla costa romagnola in Italia. 
+Il tuo compito è aiutare i visitatori a scoprire eventi, attività e luoghi interessanti.
+
+Ecco gli eventi in programma per oggi:
+
+${eventsContext}
+
+Basandoti su questi eventi e sulla tua conoscenza di Cesenatico, fornisci suggerimenti personalizzati e utili.
+Se l'utente chiede informazioni sugli eventi, usa i dati sopra.
+Se non ci sono eventi, suggerisci comunque attrazioni e attività tipiche di Cesenatico.
+Rispondi sempre in italiano in modo cordiale e entusiasta.`;
 
   const provider = createOpenAICompatible({
     name: 'shopify-proxy',
@@ -26,6 +122,7 @@ export async function action({ request }: Route.ActionArgs) {
   
   const result = await generateText({
     model,
+    system: systemPrompt,
     messages,
   });
 
@@ -85,13 +182,19 @@ export default function Chat() {
   };
 
   return (
-    <div className="flex flex-col h-screen bg-zinc-950">
+    <div className="flex flex-col h-screen bg-gradient-to-b from-sky-950 via-zinc-950 to-zinc-950">
       {/* Header */}
-      <header className="flex-shrink-0 border-b border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
-        <div className="max-w-3xl mx-auto px-4 py-4">
-          <h1 className="text-lg font-semibold text-zinc-100 tracking-tight">
-            AI Chat
-          </h1>
+      <header className="flex-shrink-0 border-b border-sky-800/30 bg-sky-950/50 backdrop-blur-sm">
+        <div className="max-w-3xl mx-auto px-4 py-4 flex items-center gap-3">
+          <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center shadow-lg shadow-orange-500/20">
+            <span className="text-xl">⛵</span>
+          </div>
+          <div>
+            <h1 className="text-lg font-semibold text-zinc-100 tracking-tight">
+              Visit Cesenatico
+            </h1>
+            <p className="text-xs text-sky-400/80">Il tuo assistente turistico</p>
+          </div>
         </div>
       </header>
 
@@ -100,27 +203,35 @@ export default function Chat() {
         <div className="max-w-3xl mx-auto px-4 py-6">
           {messages.length === 0 ? (
             <div className="flex flex-col items-center justify-center h-full min-h-[60vh] text-center">
-              <div className="w-16 h-16 rounded-2xl bg-gradient-to-br from-sky-400/20 to-blue-600/20 flex items-center justify-center mb-6 ring-1 ring-sky-500/20">
-                <svg
-                  className="w-8 h-8 text-sky-400"
-                  fill="none"
-                  viewBox="0 0 24 24"
-                  stroke="currentColor"
-                  strokeWidth={1.5}
-                >
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    d="M8.625 12a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H8.25m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0H12m4.125 0a.375.375 0 11-.75 0 .375.375 0 01.75 0zm0 0h-.375M21 12c0 4.556-4.03 8.25-9 8.25a9.764 9.764 0 01-2.555-.337A5.972 5.972 0 015.41 20.97a5.969 5.969 0 01-.474-.065 4.48 4.48 0 00.978-2.025c.09-.457-.133-.901-.467-1.226C3.93 16.178 3 14.189 3 12c0-4.556 4.03-8.25 9-8.25s9 3.694 9 8.25z"
-                  />
-                </svg>
+              <div className="w-20 h-20 rounded-2xl bg-gradient-to-br from-amber-400/20 to-orange-500/20 flex items-center justify-center mb-6 ring-1 ring-amber-500/20">
+                <span className="text-4xl">🏖️</span>
               </div>
-              <h2 className="text-xl font-medium text-zinc-200 mb-2">
-                Start a conversation
+              <h2 className="text-2xl font-medium text-zinc-200 mb-2">
+                Benvenuto a Cesenatico!
               </h2>
-              <p className="text-zinc-500 max-w-sm">
-                Type a message below to begin chatting with the AI.
+              <p className="text-zinc-400 max-w-md mb-6">
+                Chiedimi degli eventi di oggi, cosa vedere, dove mangiare o qualsiasi consiglio per la tua visita.
               </p>
+              <div className="flex flex-wrap gap-2 justify-center">
+                <button 
+                  onClick={() => setInput("Cosa c'è da fare oggi?")}
+                  className="px-4 py-2 rounded-full bg-sky-900/50 text-sky-300 text-sm hover:bg-sky-800/50 transition-colors ring-1 ring-sky-700/50"
+                >
+                  🎉 Eventi di oggi
+                </button>
+                <button 
+                  onClick={() => setInput("Quali sono le attrazioni principali?")}
+                  className="px-4 py-2 rounded-full bg-sky-900/50 text-sky-300 text-sm hover:bg-sky-800/50 transition-colors ring-1 ring-sky-700/50"
+                >
+                  🏛️ Attrazioni
+                </button>
+                <button 
+                  onClick={() => setInput("Dove posso mangiare bene?")}
+                  className="px-4 py-2 rounded-full bg-sky-900/50 text-sky-300 text-sm hover:bg-sky-800/50 transition-colors ring-1 ring-sky-700/50"
+                >
+                  🍝 Ristoranti
+                </button>
+              </div>
             </div>
           ) : (
             <div className="space-y-6">
@@ -132,8 +243,8 @@ export default function Chat() {
                   <div
                     className={`max-w-[85%] ${
                       message.role === "user"
-                        ? "bg-gradient-to-br from-sky-500 to-blue-600 text-white rounded-2xl rounded-br-md px-4 py-3"
-                        : "bg-zinc-900 text-zinc-100 rounded-2xl rounded-bl-md px-4 py-3 ring-1 ring-zinc-800"
+                        ? "bg-gradient-to-br from-amber-500 to-orange-600 text-white rounded-2xl rounded-br-md px-4 py-3 shadow-lg shadow-orange-500/10"
+                        : "bg-sky-950/60 text-zinc-100 rounded-2xl rounded-bl-md px-4 py-3 ring-1 ring-sky-800/50"
                     }`}
                   >
                     <p className="whitespace-pre-wrap leading-relaxed">
@@ -142,7 +253,7 @@ export default function Chat() {
                         index === messages.length - 1 &&
                         message.role === "assistant" &&
                         !message.content && (
-                          <span className="inline-block w-1.5 h-4 ml-0.5 bg-sky-400 animate-pulse rounded-full align-middle" />
+                          <span className="inline-block w-1.5 h-4 ml-0.5 bg-amber-400 animate-pulse rounded-full align-middle" />
                         )}
                     </p>
                   </div>
@@ -155,7 +266,7 @@ export default function Chat() {
       </main>
 
       {/* Input */}
-      <footer className="flex-shrink-0 border-t border-zinc-800/50 bg-zinc-950/80 backdrop-blur-sm">
+      <footer className="flex-shrink-0 border-t border-sky-800/30 bg-zinc-950/80 backdrop-blur-sm">
         <div className="max-w-3xl mx-auto px-4 py-4">
           <form onSubmit={handleSubmit} className="relative">
             <input
@@ -163,15 +274,15 @@ export default function Chat() {
               type="text"
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="Type a message..."
+              placeholder="Chiedimi qualcosa su Cesenatico..."
               disabled={isLoading}
-              className="w-full bg-zinc-900 text-zinc-100 placeholder-zinc-500 rounded-xl px-4 py-3 pr-12 ring-1 ring-zinc-800 focus:ring-2 focus:ring-sky-500/50 focus:outline-none transition-all disabled:opacity-50"
+              className="w-full bg-zinc-900/80 text-zinc-100 placeholder-zinc-500 rounded-xl px-4 py-3 pr-12 ring-1 ring-sky-800/50 focus:ring-2 focus:ring-amber-500/50 focus:outline-none transition-all disabled:opacity-50"
               autoFocus
             />
             <button
               type="submit"
               disabled={!input.trim() || isLoading}
-              className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg bg-gradient-to-br from-sky-500 to-blue-600 flex items-center justify-center text-white disabled:opacity-30 disabled:cursor-not-allowed hover:from-sky-400 hover:to-blue-500 transition-all"
+              className="absolute right-2 top-1/2 -translate-y-1/2 w-8 h-8 rounded-lg bg-gradient-to-br from-amber-400 to-orange-500 flex items-center justify-center text-white disabled:opacity-30 disabled:cursor-not-allowed hover:from-amber-300 hover:to-orange-400 transition-all shadow-lg shadow-orange-500/20"
             >
               {isLoading ? (
                 <svg className="w-4 h-4 animate-spin" fill="none" viewBox="0 0 24 24">
